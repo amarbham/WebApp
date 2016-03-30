@@ -109,7 +109,9 @@ gulp.task('watch', function() {
 gulp.task('default', [
     'reload-templates',
     'reload-styles',
-    'reload-scripts'
+    'reload-scripts',
+    'serve',
+    'watch'
 ]);
 
 /*TODO Add dev, dev build and production build**/
