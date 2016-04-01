@@ -1,14 +1,17 @@
 
 var gulp = require('gulp'),
+    argv = require('yargs').argv,
+    browserSync = require('browser-sync'),
     clean = require('gulp-clean'),
     cleanCSS = require('gulp-clean-css'),
-    browserSync = require('browser-sync'),
+    gulpif = require('gulp-if'),
     rename = require('gulp-rename'),
     autoprefixer = require('gulp-autoprefixer'),
     concat = require('gulp-concat'), // TODO May remove after adding Browserify
     uglify = require('gulp-uglify'),
     sass = require('gulp-sass'),
     sourcemaps = require('gulp-sourcemaps'),
+    runSequence = require('run-sequence'),
     util = require('gulp-util'),
     useref = require('gulp-useref');  //TODO for injecting CSS to HTML
 
@@ -17,7 +20,7 @@ var paths = {
     src: {
         html: "./*.html",
         sass: "./src/styles/**/*.scss",
-        app: "./src/app/",
+        app: "./src/app/**/*.js",
         css: "./src/styles/*.css",
         tests: "./src/ " //Add karma and jasmine for unit testing
     },
@@ -28,90 +31,89 @@ var paths = {
     }
 }
 
-/* Custom Task Configurations */
-var tasks = {
-    styles: function() {
-        return gulp.src([paths.src.sass])
-            .pipe(sourcemaps.init())
-            .pipe(sass().on('error', sass.logError))
-            .pipe(autoprefixer('last 2 versions'))
-            .pipe(sourcemaps.write())
-            .pipe(gulp.dest('./src/styles/'))
-            .pipe(cleanCSS({ compatibility: 'ie8' }))
-            .pipe(rename({ suffix: '.min' }))
-            .pipe(gulp.dest(paths.dist.styles))
-            .pipe(browserSync.stream());
-    },
-    scripts: function() {
-        return gulp.src([paths.src.app + '/app.module.js', paths.src.app + '/**/*.js'])
-            .pipe(sourcemaps.init())
-            .pipe(concat('main.js'))
-            .pipe(gulp.dest('./src/app/'))
-            .pipe(sourcemaps.write())
-            .pipe(gulp.dest('./src/app/'))
-            .pipe(rename({ suffix: '.min' }))
-            .pipe(uglify())
-            .pipe(gulp.dest(paths.dist.scripts))
+/* Neat trick to turn undefined into a proper false */
+var production = !!util.env.production
 
-            .pipe(browserSync.stream());
+/* Custom Task Configurations */
+var config = {
+    styles: {
+        build: function() {
+            return gulp.src(paths.src.sass)
+                .pipe(sourcemaps.init())
+                .pipe(sass().on('error', sass.logError))
+                .pipe(autoprefixer('last 2 versions'))
+                .pipe(sourcemaps.write())
+                .pipe(gulp.dest('./src/styles/'))
+                .pipe(browserSync.stream())
+                .pipe(gulpif(production, rename({ suffix: '.min' })))
+                .pipe(gulpif(production, cleanCSS({ compatibility: 'ie8' })))
+                .pipe(gulpif(production, gulp.dest(paths.dist.styles)))
+        }
     },
-    templates: function() {
-        return gulp.src(paths.src.html)
-            // .pipe(useref())
-            .pipe(gulp.dest(paths.dist.templates))
-            .pipe(browserSync.stream());
-    },
-    clean: {
-        scripts: function() {
+    scripts: {
+        build: function() {
+            return gulp.src(paths.src.app)
+                .pipe(sourcemaps.init())
+                .pipe(concat('main.js'))
+                .pipe(sourcemaps.write())
+                .pipe(gulp.dest('./src/app/'))
+                .pipe(browserSync.stream())
+                .pipe(gulpif(production, rename({ suffix: '.min' })))
+                .pipe(gulpif(production, uglify()))
+                .pipe(gulpif(production, gulp.dest(paths.dist.scripts)))
+        },
+        clean: function() {
             return gulp.src('./src/app/main.js', { read: false })
                 .pipe(clean());
+        }
+    },
+    templates: {
+        build: function() {
+            return gulp.src(paths.src.html)
+                .pipe(browserSync.stream())
+                .pipe(gulpif(production, useref()))
+                .pipe(gulpif('*.js', uglify()))
+                .pipe(gulpif('*.css', cleanCSS()))
+                .pipe(gulpif(production, gulp.dest(paths.dist.templates)))
         }
     },
     browserSync: function() {
         return browserSync.init({
             browser: ["google chrome"],
-            minify: false, /*** TODO Check if Dev build or production build and change accordingly */
+            minify: false,
             injectChanges: true,
             server: {
-                baseDir: "./"
+                baseDir: !production ? "./" : "./dist"
             },
             port: process.env.PORT || 3000
         })
-    }
+
+    },
+
 }
 
-/*Custom Gulp Task declarations*/
+var tasks = {
+    development: ['build-scripts', 'build-styles', 'build-templates', 'serve', 'watch'],
+    production: ['serve']
+}
 
-// Cleans javascript output main.js file
-gulp.task('clean-scripts', tasks.clean.scripts);
+gulp.task('clean-scripts', config.scripts.clean);
+gulp.task('build-scripts', ['clean-scripts'], config.scripts.build);
+gulp.task('build-styles', config.styles.build);
+gulp.task('build-templates', production ? ['build-scripts', 'build-styles'] : [], config.templates.build);
+gulp.task('serve', ['build-templates'], config.browserSync);
 
-// Transpiles SASS to CSS
-gulp.task('reload-styles', tasks.styles);
-
-// Cleans any previous main.js output file first and then rebuilds all app scripts
-gulp.task('reload-scripts', ['clean-scripts'], tasks.scripts);
-
-// Rebuilds html templates
-gulp.task('reload-templates', tasks.templates);
-
-// Builds html templates first and then fires up a local web server
-gulp.task('serve', ['reload-templates'], tasks.browserSync);
-
-
-//Watches changes in source files and reloads the browser on change
 gulp.task('watch', function() {
-    gulp.watch(paths.src.html, ['reload-templates']).on('change', browserSync.reload)
-    gulp.watch(paths.src.sass, ['reload-styles']).on('change', browserSync.reload)
-    gulp.watch(paths.src.app, ['reload-scripts']).on('change', browserSync.reload)
-    util.log(util.colors.bgBlue('Watching for changes...'));
-});
+    gulp.watch(paths.src.app, ['build-scripts']).on('change', browserSync.reload)
+    gulp.watch(paths.src.html, ['build-templates']).on('change', browserSync.reload)
+    gulp.watch(paths.src.sass, ['build-styles']).on('change', browserSync.reload)
+})
 
-gulp.task('default', [
-    'reload-templates',
-    'reload-styles',
-    'reload-scripts',
-    'serve',
-    'watch'
-]);
+gulp.task('default', production ? tasks.production : tasks.development)
 
-/*TODO Add dev, dev build and production build**/
+/*  How to use: -
+
+    1. gulp                 (one off development build and watches for changes)
+    2. gulp --production    (creates distribution ready files for production)
+
+*/
